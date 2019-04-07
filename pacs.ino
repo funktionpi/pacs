@@ -3,23 +3,34 @@
 #include <TM1637.h>
 #include <Wire.h>
 #include <SeeedOLED.h>
+#include <dmtimer.h>
 
-#define DEBUG 1
+#define DEBUG 0
 
-#define PIN_DUST 6
+#define TEMPERATURE_MIN 20 // temperature the fan will start spinning
+#define TEMPERATURE_MAX 70 // temperature the fan will get to it's max speed
+#define FAN_SPEED_MIN 0.15f // under 15% it's not worth it
+
+#define PIN_DUST 8
 
 #define PIN_DIGIT_CLK 2
 #define PIN_DIGIT_DIO 3
 
 #define PIN_DHT 4
-#define DHTTYPE DHT22
+#define DHTTYPE AM2301
+
+#define PIN_MOSFET 6
 
 DHT dht(PIN_DHT, DHTTYPE);
 TM1637 digits(PIN_DIGIT_CLK, PIN_DIGIT_DIO);
 
+DMTimer screenTimer(100000);
+DMTimer dhtTimer(100000);
+DMTimer dotTimer(500000);
+
 class DustSensor
 {
-public:
+ public:
    void update();
    void init();
 
@@ -36,7 +47,7 @@ struct
    float concentration = 0;
    float temperature;
    float humidity;
-   int fanRatio = 100;
+   float fanRatio = 1;
 } state;
 
 bool digitDot = false;
@@ -45,7 +56,7 @@ int line = 0;
 void setup()
 {
 #ifdef DEBUG
-   Serial.begin(9600);
+   Serial.begin(115200);
 #endif
 
    Serial.println("PI Active Cooling System");
@@ -62,44 +73,54 @@ void setup()
    digits.clearDisplay();
    digits.set();
 
+   pinMode(PIN_MOSFET, OUTPUT);
+
    dust.init();
 }
 
 void loop()
 {
-   delay(500);
 
-   updateDHT();
+   if (dhtTimer.isTimeReached())
+   {
+      updateDHT();
+      //analogWrite(PIN_MOSFET, 255);
+//      analogWrite(PIN_MOSFET, int(state.fanRatio * 255) );
+      digits.displayNum(state.temperature, 2, false);
+   }
+
    dust.update();
 
-   digitDot = !digitDot;
+   if (dotTimer.isTimeReached())
+   {
+      digitDot = !digitDot;
+      digits.point(digitDot);
+   }
 
-   digits.point(digitDot);
-   digits.displayNum(state.temperature, 2, false);
+   if (screenTimer.isTimeReached())
+   {
+      char buf[32];
+      line = 0;
 
-   char buf[32];
-   line = 0;
+      SeeedOled.setTextXY(0, 0);
 
-   // SeeedOled.clearDisplay();
-   SeeedOled.setTextXY(0, 0);
+      displayLine("   -= PACS =-");
+      line++;
 
-   displayLine("   -= PACS =-");
-   line++;
+      sprintFloat(buf, "Temp: %sC", state.temperature);
+      displayLine(buf);
 
-   sprintFloat(buf, "Temp: %sC", state.temperature);
-   displayLine(buf);
+      sprintFloat(buf, "Humi: %s%%", state.humidity);
+      displayLine(buf);
 
-   sprintFloat(buf, "Humi: %s%%", state.humidity);
-   displayLine(buf);
+      sprintFloat(buf, "Dust LPO: %s", state.concentration);
+      displayLine(buf);
 
-   sprintFloat(buf, "Dust LPO: %s", state.concentration);
-   displayLine(buf);
+      sprintf(buf, "Fan Speed: %3d%%", int(state.fanRatio * 100));
+      displayLine(buf);
+   }
 
-   int speed = 100;
-   sprintf(buf, "Fan Speed: %d%%", 0);
-   displayLine(buf);
-
-   Serial.flush();
+   // Serial.flush();
 }
 
 void displayLine(const char *msg)
@@ -114,14 +135,14 @@ void sprintFloat(char *buf, const char *format, float stat)
    char temp[6];
    /* 4 is mininum width, 2 is precision; float value is copied onto str_temp*/
    dtostrf(stat, 4, 2, temp);
-   
+
    sprintf(buf, format, temp);
 }
 
 void updateDHT()
 {
    float h = dht.readHumidity();
-   float t = dht.readTemperature();
+   float t = dht.readTemperature(false, true);
 
    float dust = 0;
 
@@ -129,10 +150,22 @@ void updateDHT()
    if (isnan(h) || isnan(t))
    {
       Serial.println(F("Failed to read from DHT sensor!"));
+      return;
    }
 
    state.temperature = t;
    state.humidity = h;
+
+   state.fanRatio = (t - TEMPERATURE_MIN) / TEMPERATURE_MAX;
+   
+   if (state.fanRatio > 1.0f) 
+   {
+      state.fanRatio = 1;
+   }
+   else if (state.fanRatio < FAN_SPEED_MIN)
+   {
+      state.fanRatio = 0;
+   }
 }
 
 void DustSensor::init()
