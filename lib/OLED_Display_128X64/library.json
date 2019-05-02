@@ -1,0 +1,15 @@
+{
+    "authors": {
+        "name": "Seeed Studio",
+        "url": "https://github.com/Seeed-Studio"
+    },
+    "description": "128x64 oled",
+    "frameworks": "*",
+    "keywords": "Grove_OLED_Display_128X64",
+    "name": "Grove_OLED_Display_128X64",
+    "platforms": "*",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/Seeed-Studio/OLED_Display_128X64"
+    }
+}
