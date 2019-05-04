@@ -6,7 +6,7 @@
 #include <dmtimer.h>
 #include "EmonLib.h"             // Include Emon Library
 
-#define DEBUG 1
+#define DEBUG 0
 
 #define TEMPERATURE_MIN 20 // temperature the fan will start spinning
 #define TEMPERATURE_MAX 70 // temperature the fan will get to it's max speed
@@ -22,7 +22,7 @@
 #define PIN_MOSFET 7
 #define PIN_DUST 8
 
-#define PIN_POWER1 0
+#define PIN_POWER1 2
 #define PIN_POWER2 1
 
 #define DHTTYPE AM2301
@@ -31,11 +31,17 @@ DHT dht(PIN_DHT, DHTTYPE);
 TM1637Display tempDisplay(PIN_TEMP_DIGIT_CLK, PIN_TEMP_DIGIT_DIO);
 TM1637Display powerDiplay(PIN_POW_DIGIT_CLK, PIN_POW_DIGIT_DIO);
 
-DMTimer screenTimer(100000);
-DMTimer dhtTimer(100000);
+DMTimer screenTimer(1000000);
+DMTimer dhtTimer(250000);
 DMTimer dotTimer(500000);
+DMTimer powerTimer(2500000);
 
 EnergyMonitor emon;
+
+#define EMON_MAX_AMPS 15
+#define EMON_BURDEN 41
+#define EMON_CALIBRATION  (100 / 0.05f / EMON_BURDEN)
+#define EMON_SAMPLE_COUNT 5588
 
 #define DEG_CHAR (SEG_A | SEG_B | SEG_G | SEG_F)
 #define A_CHAR 0b01110111
@@ -68,8 +74,9 @@ struct
    float humidity;
    float fanRatio = 1;
 
-   float amps = 0;
-   float volt = 0;
+   float watts = 0;
+   double vcc = 0;
+   double Irms = 0;
 } state;
 
 bool digitDot = false;
@@ -99,9 +106,8 @@ void setup()
 
    pinMode(PIN_MOSFET, OUTPUT);
 
-   emon.current(PIN_POWER1, 50);       // Current: input pin, calibration.
+   emon.current(PIN_POWER1, EMON_CALIBRATION);       // Current: input pin, calibration.
    // emon.voltage(PIN_POWER2, 234.26, 1.7);  // Voltage: input pin, calibration, phase_shift
-
 
    dust.init();
 }
@@ -125,8 +131,14 @@ void loop()
       tempDisplay.setSegments(data, 2, 2);
    }
 
-   float vcc = analogRead(PIN_POWER1) * 0.0049;
-   double Irms = emon.calcIrms(1480);
+   if (powerTimer.isTimeReached())
+   {
+      state.vcc = analogRead(PIN_POWER1) * 0.0049;
+      state.Irms = emon.calcIrms(EMON_SAMPLE_COUNT);
+      state.watts = state.Irms*EMON_MAX_AMPS;
+
+      powerDiplay.showNumberDecEx( int(state.watts), digitDot);
+   }
 
    if (dotTimer.isTimeReached())
    {
@@ -157,17 +169,17 @@ void loop()
       sprintFloat(buf, "Dust LPO: %s", state.concentration);
       displayLine(buf);
 
-      // sprintf(buf, "Fan Speed: %3d%%", int(state.fanRatio * 100));
+      sprintf(buf, "Fan Speed: %3d%%", int(state.fanRatio * 100));
+      displayLine(buf);
+
+      sprintFloat(buf, "Pin: %sv ", state.vcc);
+      displayLine(buf);
+
+      sprintFloat(buf, "Irms: %s ", state.Irms);
+      displayLine(buf);
+
+      // sprintf(buf, "Rms: %dw ", int(state.watts));
       // displayLine(buf);
-
-      sprintFloat(buf, "Pin: %sv ", vcc);
-      displayLine(buf);
-
-      sprintFloat(buf, "Irms: %s ", Irms);
-      displayLine(buf);
-
-      sprintf(buf, "Rms: %dw ", int(Irms*120));
-      displayLine(buf);
    }
 
    // Serial.flush();
@@ -189,7 +201,7 @@ void sprintFloat(char *buf, const char *format, float stat)
    sprintf(buf, format, temp);
 }
 
-void displayNum(TM1637Display& display, int num, bool dot) 
+void displayNum(TM1637Display& display, int num, bool dot)
 {
    int dotbytes = 0;
    if (dot)
@@ -206,19 +218,24 @@ void updateDHT()
 
    float dust = 0;
 
-   // Check if any reads failed and exit early (to try again).
+   // Check if any readhs failed and exit early (to try again).
    if (isnan(h) || isnan(t))
    {
+      h = 0;
+      t = 0;
       Serial.println(F("Failed to read from DHT sensor!"));
-      return;
    }
 
    state.temperature = t;
    state.humidity = h;
 
-   state.fanRatio = (t - TEMPERATURE_MIN) / TEMPERATURE_MAX;
-   
-   if (state.fanRatio > 1.0f) 
+   if (state.temperature > 0) {
+      state.fanRatio = (t - TEMPERATURE_MIN) / TEMPERATURE_MAX;
+   } else {
+      state.fanRatio = 1;
+   }
+
+   if (state.fanRatio > 1.0f)
    {
       state.fanRatio = 1;
    }
