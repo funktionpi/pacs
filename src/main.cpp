@@ -6,11 +6,11 @@
 #include <dmtimer.h>
 #include "EmonLib.h"             // Include Emon Library
 
-#define DEBUG 0
+#define DEBUG 1
 
 #define TEMPERATURE_MIN 20 // temperature the fan will start spinning
 #define TEMPERATURE_MAX 70 // temperature the fan will get to it's max speed
-#define FAN_SPEED_MIN 0.15f // under 15% it's not worth it
+#define FAN_SPEED_MIN 0.2f // under 15% it's not worth it
 
 #define PIN_TEMP_DIGIT_CLK 2
 #define PIN_TEMP_DIGIT_DIO 3
@@ -18,12 +18,11 @@
 #define PIN_POW_DIGIT_CLK 4
 #define PIN_POW_DIGIT_DIO 5
 
-#define PIN_DHT 6
-#define PIN_MOSFET 7
+#define PIN_MOSFET 6
+#define PIN_DHT 7
 #define PIN_DUST 8
 
 #define PIN_POWER1 2
-#define PIN_POWER2 1
 
 #define DHTTYPE AM2301
 
@@ -31,17 +30,17 @@ DHT dht(PIN_DHT, DHTTYPE);
 TM1637Display tempDisplay(PIN_TEMP_DIGIT_CLK, PIN_TEMP_DIGIT_DIO);
 TM1637Display powerDiplay(PIN_POW_DIGIT_CLK, PIN_POW_DIGIT_DIO);
 
-DMTimer screenTimer(1000000);
-DMTimer dhtTimer(250000);
-DMTimer dotTimer(500000);
-DMTimer powerTimer(2500000);
+DMTimer screenTimer(1000);
+DMTimer tempTimer(1000);
+DMTimer dotTimer(500);
+DMTimer powerTimer(2500);
 
 EnergyMonitor emon;
 
-#define EMON_MAX_AMPS 15
-#define EMON_BURDEN 41
+#define EMON_BURDEN 239
 #define EMON_CALIBRATION  (100 / 0.05f / EMON_BURDEN)
 #define EMON_SAMPLE_COUNT 5588
+#define EMON_VOLTAGE 118
 
 #define DEG_CHAR (SEG_A | SEG_B | SEG_G | SEG_F)
 #define A_CHAR 0b01110111
@@ -114,18 +113,19 @@ void setup()
 
 void loop()
 {
-
-   if (dhtTimer.isTimeReached())
+   if (tempTimer.isTimeReached())
    {
-      updateDHT();
+      tempTimer.reset();
       analogWrite(PIN_MOSFET, int(state.fanRatio * 255) );
+
+      updateDHT();
 
       int temp = int(state.temperature);
       displayNum(tempDisplay, temp, digitDot);
 
-      Serial.print("temp update: ");
+      Serial.print("temp: ");
       Serial.print(temp);
-      Serial.println();
+      Serial.println("c");
 
       uint8_t data[] = { DEG_CHAR, C_CHAR };
       tempDisplay.setSegments(data, 2, 2);
@@ -133,25 +133,34 @@ void loop()
 
    if (powerTimer.isTimeReached())
    {
+      auto start = millis();
+      powerTimer.reset();
+
       state.vcc = analogRead(PIN_POWER1) * 0.0049;
       state.Irms = emon.calcIrms(EMON_SAMPLE_COUNT);
-      state.watts = state.Irms*EMON_MAX_AMPS;
+      state.watts = state.Irms*EMON_VOLTAGE;
 
       powerDiplay.showNumberDecEx( int(state.watts), digitDot);
+
+      Serial.print("power: ");
+      Serial.print(state.watts);
+      Serial.print("w, took ");
+      Serial.print(millis() - start);
+      Serial.println("ms");
+
    }
 
    if (dotTimer.isTimeReached())
    {
+      dotTimer.reset();
       digitDot = !digitDot;
-
       int temp = int(state.temperature);
       displayNum(tempDisplay, temp, digitDot);
-
-      // emon.serialprint();
    }
 
    if (screenTimer.isTimeReached())
    {
+      screenTimer.reset();
       char buf[32];
       line = 0;
 
@@ -160,6 +169,9 @@ void loop()
       displayLine("   -= PACS =-");
       // line++;
 
+      sprintf(buf, "Fan Speed: %3d%%", int(state.fanRatio * 100));
+      displayLine(buf);
+
       sprintFloat(buf, "Temp: %sC", state.temperature);
       displayLine(buf);
 
@@ -167,9 +179,6 @@ void loop()
       displayLine(buf);
 
       sprintFloat(buf, "Dust LPO: %s", state.concentration);
-      displayLine(buf);
-
-      sprintf(buf, "Fan Speed: %3d%%", int(state.fanRatio * 100));
       displayLine(buf);
 
       sprintFloat(buf, "Pin: %sv ", state.vcc);
@@ -216,14 +225,19 @@ void updateDHT()
    float h = dht.readHumidity();
    float t = dht.readTemperature(false);
 
-   float dust = 0;
-
    // Check if any readhs failed and exit early (to try again).
-   if (isnan(h) || isnan(t))
+   if (isnan(h))
    {
       h = 0;
+      // Serial.println("");
+      // Serial.println(F("Failed to read humidity!"));
+   }
+
+   if (isnan(t) || t == 0)
+   {
       t = 0;
-      Serial.println(F("Failed to read from DHT sensor!"));
+      Serial.println("");
+      Serial.println(F("Failed to read temperature!"));
    }
 
    state.temperature = t;
@@ -232,12 +246,13 @@ void updateDHT()
    if (state.temperature > 0) {
       state.fanRatio = (t - TEMPERATURE_MIN) / TEMPERATURE_MAX;
    } else {
-      state.fanRatio = 1;
+      Serial.println(F("Going fan full powa!"));
+      state.fanRatio = 1.0f;
    }
 
    if (state.fanRatio > 1.0f)
    {
-      state.fanRatio = 1;
+      state.fanRatio = 1.0f;
    }
    else if (state.fanRatio < FAN_SPEED_MIN)
    {
