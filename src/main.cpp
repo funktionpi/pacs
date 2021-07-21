@@ -9,9 +9,9 @@
 
 #define DEBUG 0
 
-#define TEMPERATURE_POWER_OFFSET 5  // number of celsius
+#define TEMPERATURE_POWER_OFFSET 3  // number of celsius
 
-#define TEMPERATURE_MIN 40  // temperature the fan will start spinning
+#define TEMPERATURE_MIN 43  // temperature the fan will start spinning
 #define TEMPERATURE_MAX 70  // temperature the fan will get to it's max speed
 #define FAN_SPEED_MIN 0.2f  // under 15% it's not worth it
 
@@ -87,10 +87,7 @@ struct
 int line = 0;
 
 void setup() {
-#ifdef DEBUG
   Serial.begin(9600);
-#endif
-
   Serial.println("PI Active Cooling System");
 
   dht.begin();
@@ -220,27 +217,24 @@ void displayNum(TM1637Display &display, int num, bool dot) {
 }
 
 void updateDHT() {
-  float h = dht.readHumidity();
-  float t = dht.readTemperature(false);
+  state.humidity = dht.readHumidity();
+  state.temperature = dht.readTemperature(false);
 
   // Check if any readhs failed and exit early (to try again).
-  if (isnan(h)) {
-    h = 0;
+  if (isnan(state.humidity)) {
+    state.humidity = 0;
     // Serial.println("");
     // Serial.println(F("Failed to read humidity!"));
   }
 
-  if (isnan(t) || t == 0) {
-    t = 0;
+  if (isnan(state.temperature) || state.temperature == 0) {
+    state.temperature = 0;
     Serial.println("");
     Serial.println(F("Failed to read temperature!"));
   }
 
-  state.temperature = t;
-  state.humidity = h;
-
   if (state.temperature > 0) {
-    state.fanRatio = (t - TEMPERATURE_MIN) / TEMPERATURE_MAX;
+    state.fanRatio = (round(state.temperature) - TEMPERATURE_MIN) / TEMPERATURE_MAX;
   } else {
     // Serial.println(F("Going fan full powa!"));
     state.fanRatio = 1.0f;
@@ -255,7 +249,7 @@ void updateDHT() {
 
   // toggle on/off
   if (state.fanActivated) {
-    if (state.temperature < TEMPERATURE_MIN - TEMPERATURE_POWER_OFFSET) {
+    if (state.temperature <= TEMPERATURE_MIN - TEMPERATURE_POWER_OFFSET) {
       state.fanActivated = false;
     }
   } else {
